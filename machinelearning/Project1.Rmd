@@ -1,0 +1,212 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+---
+title: "Practical Machine Learning - Project 1"
+author: "Hafidz Zulkifli"
+date: "Sunday, August 16, 2015"
+output: html_document
+---
+
+*Introduction*
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, we will be using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+*Objective*
+
+The objective of this project is to predict the manner in which they did the exercise (ie correctly or incorrectly). Among others, this report will contain information on:
+
+1. How we build our model
+2. How we used cross validation
+3. What we think about the out of sample error
+4. Why certain methods were used instead of others
+
+Having built the predictive model, we will then attempt to predict 20 different test cases based on the testing data set provided.
+
+The outcome in the dataset is based in the "classe" variable in the dataset.
+
+*Data Massaging and Exploration*
+
+```{r echo=FALSE}
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+library(caret)
+
+
+setwd("D:/Self_Development/Coursera - JHU/8. Practical Machine Learning/Project-Writeup/")
+pml.training <- read.csv("pml-training.csv")
+pml.test <- read.csv("pml-testing.csv")
+```
+
+```{r}
+#summary(pml.training)
+
+#we see a lot of NA's. remove columns which has a lot of NAs
+
+pml.training_2 <- pml.training[, colMeans(is.na(pml.training)) <= .15] 
+summary(pml.training_2)
+
+# remove fields with a lot of empty values.
+summary(pml.training_2)
+pml.training_2$X <- NULL
+pml.training_2$amplitude_yaw_forearm <- NULL
+pml.training_2$min_yaw_forearm <- NULL
+pml.training_2$max_yaw_forearm <- NULL
+pml.training_2$skewness_yaw_forearm <- NULL
+pml.training_2$skewness_pitch_forearm <- NULL
+pml.training_2$skewness_roll_forearm <- NULL
+pml.training_2$kurtosis_yaw_forearm <- NULL
+pml.training_2$kurtosis_picth_forearm <- NULL
+pml.training_2$kurtosis_roll_forearm <- NULL
+pml.training_2$amplitude_yaw_dumbbell <- NULL
+pml.training_2$min_yaw_dumbbell <- NULL
+pml.training_2$max_yaw_dumbbell <- NULL
+pml.training_2$skewness_yaw_dumbbell <- NULL
+pml.training_2$skewness_pitch_dumbbell <- NULL
+pml.training_2$skewness_roll_dumbbell <- NULL
+pml.training_2$kurtosis_yaw_dumbbell <- NULL
+pml.training_2$kurtosis_picth_dumbbell <- NULL
+pml.training_2$kurtosis_roll_dumbbell <- NULL
+pml.training_2$skewness_yaw_arm <- NULL
+pml.training_2$skewness_pitch_arm <- NULL
+pml.training_2$skewness_roll_arm <- NULL
+pml.training_2$kurtosis_yaw_arm <- NULL
+pml.training_2$kurtosis_picth_arm <- NULL
+pml.training_2$kurtosis_roll_arm <- NULL
+pml.training_2$amplitude_yaw_belt <- NULL
+pml.training_2$min_yaw_belt <- NULL
+pml.training_2$max_yaw_belt <- NULL
+pml.training_2$skewness_yaw_belt <- NULL
+pml.training_2$skewness_roll_belt.1 <- NULL
+pml.training_2$skewness_roll_belt <- NULL
+pml.training_2$kurtosis_yaw_belt <- NULL
+pml.training_2$kurtosis_picth_belt <- NULL
+pml.training_2$kurtosis_roll_belt <- NULL
+
+```
+
+In the above we've gone through the data set and found that there are many fields that either have NAs in them or are just simply blank. As such, we've removed them from the dataset and concentrate our focus on those fields that has value and can be used in our learning.
+
+```{r}
+#separating training data for out of sample validation
+set.seed(1234)
+ind <- sample(2, nrow(pml.training_2), replace=TRUE, prob=c(0.7, 0.3))
+
+d_train <- pml.training_2[ind==1,]
+d_test <- pml.training_2[ind==2,]
+```
+
+We split our training data set (pml-training.csv) into two parts - a training set and a test set with a 0.7 and 0.3 ratio respectively. This is so that we could avoid building a model that overfits the data and allow some room for out of sample testing for further validation.
+
+We then change our focus to reducing the number of variables that we're evaluating. Reducing the number of dimensions have multiple benefits; such as improving computational performance and increasing prediction accuracy.
+
+To do this, we will take our training sample set (d_train) and find the correlation between every 2 variable within the dataset. Note that to do this the variables itself needs to be numeric - thus certain fields - which are deemed not needed anyway - can be removed.
+
+
+
+```{r}
+#removing unneeded fields from training sample
+
+#summary(d_train)
+d_train$amplitude_yaw_forearm
+M <- d_train[,-1]
+M <- M[,-58]
+#summary(M)
+M$raw_timestamp_part_1 <- NULL
+M$raw_timestamp_part_2 <- NULL
+M$cvtd_timestamp <- NULL
+M$new_window <- NULL
+
+#finding correlation between each two variable
+
+M <- abs(cor(M))
+diag(M) <- 0
+M[upper.tri(M)] <- 0
+
+#final list of variable which has high correlation with other fields.
+unique(row.names(which(M > 0.8, arr.ind=T)))
+
+```
+
+Based on the correlation matrix, we assign '0' to upper triangle and the diagonal side of the matrix. We then check whether or not the two values have high correlation - in this case whether or not the correlation rate is more than 80%. Thus we have now find some features which interestingly have high correlation with other fields. 
+
+Next we will use these fields in our model. For starters, we will opt for decision tree since it will be easy to understand the results. 
+
+*Building the Prediction Model*
+
+```{r}
+#decision tree
+
+tree <- rpart(classe ~ yaw_belt + total_accel_belt + accel_belt_y + accel_belt_z + accel_belt_x + magnet_belt_x + gyros_arm_y + magnet_arm_x + magnet_arm_z + accel_dumbbell_x + accel_dumbbell_z, data=d_train, method = "class")
+
+z <- order(tree$variable.importance)
+dotchart(tree$variable.importance[z],labels=row.names(tree$variable.importance[z]),cex=.7,
+         main="Features", 
+         xlab="Variable Importance")
+#fancyRpartPlot(tree, sub="", main="decision tree")
+```
+
+We can now see that certain variables are indeed have higher importance than others, . We now look at the prediction results.
+
+
+```{r}
+treePred <- predict(tree, d_test, type="class")
+confusionMatrix(treePred,d_test$classe)
+
+#low accuracy
+```
+
+Unfortunately the prediction based on decision tree only managed to give us around 54% of accuracy when tested on our out of sample test set. Based on the previous model, we see that not all variable has the same importance. In our next model, we will use only the most important features - specifically "yaw_belt" and "accel_belt_z"
+
+
+```{r}
+tree_2 <- rpart(classe ~ yaw_belt + accel_belt_z , data=d_train, method = "class")
+treePred_2 <- predict(tree_2, d_test, type="class")
+confusionMatrix(treePred_2,d_test$classe)
+```
+
+The model now gives us a small increment of accuracy (58%). We argue that perhaps with the right combination of features, we could probably increase the accuracy even further.
+
+Next we will try to use the ensemble method using conditional random forest. This would hopefully give us better accuracy as multiple trees will be generated and the results than compared against each other to improve the accuracy. Furthermore doing this saves us time from having to do a separate cross validation as it will be taken care of internally within the function itself.
+
+
+```{r}
+#conditional random forest
+
+library(party)
+set.seed(415)
+
+fit <- cforest(as.factor(classe) ~ yaw_belt + total_accel_belt + accel_belt_y + accel_belt_z + accel_belt_x + magnet_belt_x + gyros_arm_y + magnet_arm_x + magnet_arm_z + accel_dumbbell_x + accel_dumbbell_z, data=d_train, controls=cforest_unbiased(ntree=1000, mtry=3))
+save.image("D:/Self_Development/Coursera - JHU/8. Practical Machine Learning/Project-Writeup/workspace.RData")
+predict <- predict(fit, d_test, OOB=TRUE, type = "response")
+confusionMatrix(predict,d_test$classe)
+
+crf_varimp <- varimp(fit)
+z2 <- order(crf_varimp)
+dotchart(crf_varimp[z2],labels=row.names(crf_varimp[z2]),cex=.7,
+         main="Features", 
+         xlab="Variable Importance")
+
+```
+
+By using conditional random forest, we have improved the result to 89%, and increase of more than 30% compared to using decision tree. We also found that "accel_dumbbell_x" is now the most important feature among our set of features.
+
+*Conclusion*
+
+To following points summarizes our findings:
+1. Data cleansing is crucial in any model building as it removes the bulk of the noise.
+2. Variables with high correlation to each other need to be removed as well to remove noise.
+3. While decision tree model can provide quick results, it does not necessarily give good accuracy.
+4. While random forest method might yield high accuracy, it comes at a cost of long computation period depending on how many trees are generated.
+
+
+
+
